@@ -1,49 +1,63 @@
-xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
-Version 6 (v6).  xv6 loosely follows the structure and style of v6,
-but is implemented for a modern RISC-V multiprocessor using ANSI C.
+第一个难点是primes
+首先，何时创建子进程是很值得考虑的；
+其次，需要谨慎地创建进程和管道，否则会提前用尽资源，因为今年的实验要求算到280，而之前的实验仅需到35。
+失败的尝试（放在去年是通过的）：
+```c
+int main(int argc, char *argv[])
+{
+  int p[2];
+  pipe(p);
+  for (int i = 2; i <= 100; i++) {
+    write(p[1], &i, sizeof(i));
+  }
+  close(p[1]);
+  int curr, num;
+  while (read(p[0], &curr, sizeof(curr)) > 0) {
+    printf("prime %d\n", curr);
+    int newp[2];
+    pipe(newp);
+    int rc = fork();
+    if (rc == 0) { // child
+      close(p[0]);
+      close(newp[1]);
+      p[0] = newp[0];
+      p[1] = newp[1];
+    } else { // parent
+      close(newp[0]);
+      while (read(p[0], &num, sizeof(num)) > 0) {
+        if (num % curr != 0) {
+          write(newp[1], &num, sizeof(num));
+        }
+      }
+      close(p[0]);
+      close(newp[1]);
+      wait(0);
+    }
+  }
+}
+```
 
-ACKNOWLEDGMENTS
+首先改成递归，仍然fail。
+并且这里的fail表现是在STOPAT超过130时，不会输出任何字符，而小于125则正常输出结果。
+```c
+int main(int argc, char *argv[])
+{
+  int p[2];
+  pipe(p);
+  for (int i = 2; i <= STOPAT; i++) {
+    write(p[1], &i, sizeof(i));
+  }
+  close(p[1]);
+  handle(p);
+  return 0;
+}
+```
+分析一下，每遇到一个质数必须要创建一个pipe（并产生新的FD），同时fork出子进程，似乎都无法省去。
+唯一可以优化的点是，目前不管下面有没有质数，都会先创建pipe及fork，于是通过增加一个flag，改成当找到不能整除的数再fork。
+但居然没有任何进步（仍然失败在130）。
 
-xv6 is inspired by John Lions's Commentary on UNIX 6th Edition (Peer
-to Peer Communications; ISBN: 1-57398-013-7; 1st edition (June 14,
-2000)).  See also https://pdos.csail.mit.edu/6.1810/, which provides
-pointers to on-line resources for v6.
+参考了网友解答，发现必须在main中就fork，父进程做写入操作，子进程直接调处理函数。
+比较一下，两者的区别应该在于子进程的方式少了向管道写入的操作。
+但原方法的`main`在调用handle()前已经关闭管道写端了，不懂为啥还有影响。
 
-The following people have made contributions: Russ Cox (context switching,
-locking), Cliff Frey (MP), Xiao Yu (MP), Nickolai Zeldovich, and Austin
-Clements.
-
-We are also grateful for the bug reports and patches contributed by
-Takahiro Aoyagi, Marcelo Arroyo, Silas Boyd-Wickizer, Anton Burtsev,
-carlclone, Ian Chen, Dan Cross, Cody Cutler, Mike CAT, Tej Chajed,
-Asami Doi,Wenyang Duan, eyalz800, Nelson Elhage, Saar Ettinger, Alice
-Ferrazzi, Nathaniel Filardo, flespark, Peter Froehlich, Yakir Goaron,
-Shivam Handa, Matt Harvey, Bryan Henry, jaichenhengjie, Jim Huang,
-Matúš Jókay, John Jolly, Alexander Kapshuk, Anders Kaseorg, kehao95,
-Wolfgang Keller, Jungwoo Kim, Jonathan Kimmitt, Eddie Kohler, Vadim
-Kolontsov, Austin Liew, l0stman, Pavan Maddamsetti, Imbar Marinescu,
-Yandong Mao, Matan Shabtay, Hitoshi Mitake, Carmi Merimovich, Mark
-Morrissey, mtasm, Joel Nider, Hayato Ohhashi, OptimisticSide,
-phosphagos, Harry Porter, Greg Price, RayAndrew, Jude Rich, segfault,
-Ayan Shafqat, Eldar Sehayek, Yongming Shen, Fumiya Shigemitsu, snoire,
-Taojie, Cam Tenny, tyfkda, Warren Toomey, Stephen Tu, Alissa Tung,
-Rafael Ubal, Amane Uehara, Pablo Ventura, Xi Wang, WaheedHafez,
-Keiichi Watanabe, Lucas Wolf, Nicolas Wolovick, wxdao, Grant Wu, x653,
-Jindong Zhang, Icenowy Zheng, ZhUyU1997, and Zou Chang Wei.
-
-The code in the files that constitute xv6 is
-Copyright 2006-2024 Frans Kaashoek, Robert Morris, and Russ Cox.
-
-ERROR REPORTS
-
-Please send errors and suggestions to Frans Kaashoek and Robert Morris
-(kaashoek,rtm@mit.edu).  The main purpose of xv6 is as a teaching
-operating system for MIT's 6.1810, so we are more interested in
-simplifications and clarifications than new features.
-
-BUILDING AND RUNNING XV6
-
-You will need a RISC-V "newlib" tool chain from
-https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
-riscv64-softmmu.  Once they are installed, and in your shell
-search path, you can run "make qemu".
+另外，开头的非递归代码按上面改成一开始就fork，也可以通过。
